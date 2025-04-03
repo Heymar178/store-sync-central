@@ -1,5 +1,4 @@
-
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import DashboardLayout from "../../components/layouts/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -30,11 +29,11 @@ import {
 } from "@/components/ui/select";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { supabase } from "@/lib/supabase.ts"; // Adjust the path if needed
 
 interface Employee {
   id: string;
-  firstName: string;
-  lastName: string;
+  name: string;
   email: string;
   phone: string;
   position: string;
@@ -42,47 +41,47 @@ interface Employee {
 }
 
 const Employees = () => {
-  const [employees, setEmployees] = useState<Employee[]>([
-    {
-      id: "1",
-      firstName: "Alex",
-      lastName: "Johnson",
-      email: "alex.johnson@example.com",
-      phone: "555-123-4567",
-      position: "Store Manager",
-      status: "active",
-    },
-    {
-      id: "2",
-      firstName: "Jamie",
-      lastName: "Smith",
-      email: "jamie.smith@example.com",
-      phone: "555-987-6543",
-      position: "Cashier",
-      status: "active",
-    },
-    {
-      id: "3",
-      firstName: "Taylor",
-      lastName: "Brown",
-      email: "taylor.brown@example.com",
-      phone: "555-456-7890",
-      position: "Stock Clerk",
-      status: "inactive",
-    },
-  ]);
-
+  const [employees, setEmployees] = useState<Employee[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [currentEmployee, setCurrentEmployee] = useState<Employee | null>(null);
+
+  // Fetch employees from Supabase
+  const fetchEmployees = async () => {
+    const { data: employeesData, error } = await supabase
+      .from("users")
+      .select("id, name, email, phone_number, position, status, role")
+      .eq("role", "employee"); // Filter users with the role 'employee'
+  
+    if (error) {
+      console.error("Error fetching employees:", error);
+      toast.error("Failed to fetch employees");
+      return;
+    }
+  
+    // Map employees to the required format
+    const formattedEmployees = employeesData.map((employee: any) => ({
+      id: employee.id,
+      name: employee.name,
+      email: employee.email,
+      phone: employee.phone_number,
+      position: employee.position || "Unknown",
+      status: employee.status || "inactive",
+    }));
+  
+    setEmployees(formattedEmployees);
+  };
+
+  useEffect(() => {
+    fetchEmployees();
+  }, []);
 
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchTerm(e.target.value);
   };
 
   const filteredEmployees = employees.filter(employee => 
-    employee.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    employee.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    employee.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     employee.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
     employee.position.toLowerCase().includes(searchTerm.toLowerCase())
   );
@@ -93,8 +92,7 @@ const Employees = () => {
     } else {
       setCurrentEmployee({
         id: "",
-        firstName: "",
-        lastName: "",
+        name: "",
         email: "",
         phone: "",
         position: "Cashier",
@@ -109,27 +107,69 @@ const Employees = () => {
     setCurrentEmployee(null);
   };
 
-  const handleDeleteEmployee = (id: string) => {
+  const handleDeleteEmployee = async (id: string) => {
+    const { error } = await supabase.from("users").delete().eq("id", id);
+
+    if (error) {
+      console.error("Error deleting employee:", error);
+      toast.error("Failed to delete employee");
+      return;
+    }
+
     setEmployees(employees.filter(employee => employee.id !== id));
     toast.success("Employee removed successfully");
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!currentEmployee) return;
 
     if (currentEmployee.id) {
       // Update existing employee
+      const { error } = await supabase
+        .from("users")
+        .update({
+          name: currentEmployee.name,
+          email: currentEmployee.email,
+          phone_number: currentEmployee.phone,
+          position: currentEmployee.position,
+          status: currentEmployee.status,
+        })
+        .eq("id", currentEmployee.id);
+
+      if (error) {
+        console.error("Error updating employee:", error);
+        toast.error("Failed to update employee");
+        return;
+      }
+
       setEmployees(employees.map(employee => 
         employee.id === currentEmployee.id ? currentEmployee : employee
       ));
       toast.success("Employee updated successfully");
     } else {
       // Add new employee
+      const { data, error } = await supabase
+        .from("users")
+        .insert({
+          name: currentEmployee.name,
+          email: currentEmployee.email,
+          phone_number: currentEmployee.phone,
+          position: currentEmployee.position,
+          status: currentEmployee.status,
+        })
+        .select();
+
+      if (error) {
+        console.error("Error adding employee:", error);
+        toast.error("Failed to add employee");
+        return;
+      }
+
       const newEmployee = {
         ...currentEmployee,
-        id: Date.now().toString(),
+        id: data[0].id,
       };
       setEmployees([...employees, newEmployee]);
       toast.success("Employee added successfully");
@@ -172,9 +212,7 @@ const Employees = () => {
                 {filteredEmployees.length > 0 ? (
                   filteredEmployees.map((employee) => (
                     <TableRow key={employee.id}>
-                      <TableCell className="font-medium">
-                        {employee.firstName} {employee.lastName}
-                      </TableCell>
+                      <TableCell className="font-medium">{employee.name}</TableCell>
                       <TableCell>{employee.email}</TableCell>
                       <TableCell>{employee.phone}</TableCell>
                       <TableCell>{employee.position}</TableCell>
@@ -235,32 +273,15 @@ const Employees = () => {
           <form onSubmit={handleSubmit}>
             <div className="grid gap-4 py-4">
               <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="firstName" className="text-right">
-                  First Name
+                <Label htmlFor="name" className="text-right">
+                  Name
                 </Label>
                 <Input
-                  id="firstName"
-                  value={currentEmployee?.firstName || ""}
+                  id="name"
+                  value={currentEmployee?.name || ""}
                   onChange={(e) => 
                     setCurrentEmployee(prev => 
-                      prev ? { ...prev, firstName: e.target.value } : null
-                    )
-                  }
-                  className="col-span-3"
-                  required
-                />
-              </div>
-              
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="lastName" className="text-right">
-                  Last Name
-                </Label>
-                <Input
-                  id="lastName"
-                  value={currentEmployee?.lastName || ""}
-                  onChange={(e) => 
-                    setCurrentEmployee(prev => 
-                      prev ? { ...prev, lastName: e.target.value } : null
+                      prev ? { ...prev, name: e.target.value } : null
                     )
                   }
                   className="col-span-3"

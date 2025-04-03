@@ -1,15 +1,14 @@
-
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import DashboardLayout from "../../components/layouts/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { 
-  Table, 
-  TableBody, 
-  TableCell, 
-  TableHead, 
-  TableHeader, 
-  TableRow 
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
 } from "@/components/ui/table";
 import {
   Select,
@@ -29,6 +28,25 @@ import {
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Eye } from "lucide-react";
+import { supabase } from "@/lib/supabase.ts";
+
+const mapStatusLabel: Record<string, string> = {
+  Pending: "Pending",
+  Ready: "Ready for Pickup",
+  Completed: "Completed",
+  Cancelled: "Cancelled",
+  Refunded: "Refunded",
+};
+
+const statusOptions = Object.keys(mapStatusLabel);
+
+const mapStatusToDbValue: Record<string, string> = {
+  Pending: "Pending",
+  Ready: "Ready",
+  Completed: "Completed",
+  Cancelled: "Cancelled",
+  Refunded: "Refunded",
+};
 
 interface OrderItem {
   id: string;
@@ -43,74 +61,73 @@ interface Order {
   date: string;
   items: OrderItem[];
   total: number;
-  status: "pending" | "ready" | "completed" | "cancelled";
+  status: keyof typeof mapStatusLabel;
 }
 
 const Orders = () => {
-  const [orders, setOrders] = useState<Order[]>([
-    {
-      id: "ORD-001",
-      customerName: "John Smith",
-      date: "2023-06-15",
-      items: [
-        { id: "1", name: "Organic Banana", quantity: 2, price: 0.99 },
-        { id: "2", name: "Red Apple", quantity: 3, price: 1.29 },
-      ],
-      total: 5.85,
-      status: "pending",
-    },
-    {
-      id: "ORD-002",
-      customerName: "Sarah Johnson",
-      date: "2023-06-15",
-      items: [
-        { id: "3", name: "Broccoli", quantity: 1, price: 2.49 },
-        { id: "4", name: "Whole Milk", quantity: 2, price: 3.99 },
-      ],
-      total: 10.47,
-      status: "ready",
-    },
-    {
-      id: "ORD-003",
-      customerName: "Michael Brown",
-      date: "2023-06-14",
-      items: [
-        { id: "5", name: "White Bread", quantity: 1, price: 2.99 },
-        { id: "1", name: "Organic Banana", quantity: 3, price: 0.99 },
-        { id: "4", name: "Whole Milk", quantity: 1, price: 3.99 },
-      ],
-      total: 9.95,
-      status: "completed",
-    },
-    {
-      id: "ORD-004",
-      customerName: "Emily Wilson",
-      date: "2023-06-14",
-      items: [
-        { id: "2", name: "Red Apple", quantity: 5, price: 1.29 },
-        { id: "3", name: "Broccoli", quantity: 2, price: 2.49 },
-      ],
-      total: 11.43,
-      status: "cancelled",
-    },
-  ]);
-
+  const [orders, setOrders] = useState<Order[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("All");
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+
+  const fetchOrders = async () => {
+    const { data: ordersData, error: ordersError } = await supabase
+      .from("orders")
+      .select(`
+        id,
+        user_id,
+        status,
+        total_price,
+        created_at,
+        users (name),
+        order_items (
+          id,
+          quantity,
+          price,
+          products (name)
+        )
+      `);
+
+    if (ordersError) {
+      console.error("Error fetching orders:", ordersError);
+      toast.error("Failed to fetch orders");
+      return;
+    }
+
+    const formattedOrders = ordersData.map((order: any) => ({
+      id: order.id,
+      customerName: order.users?.name || "Unknown Customer",
+      date: new Date(order.created_at).toLocaleDateString(),
+      items: order.order_items.map((item: any) => ({
+        id: item.id,
+        name: item.products?.name || "Unknown Product",
+        quantity: item.quantity,
+        price: item.price,
+      })),
+      total: order.total_price,
+      status: order.status || "Pending",
+    }));
+
+    setOrders(formattedOrders);
+  };
+
+  useEffect(() => {
+    fetchOrders();
+  }, []);
 
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchTerm(e.target.value);
   };
 
-  const filteredOrders = orders.filter(order => {
-    const matchesSearch = 
+  const filteredOrders = orders.filter((order) => {
+    const matchesSearch =
       order.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       order.id.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    const matchesStatus = statusFilter === "all" || order.status === statusFilter;
-    
+
+    const matchesStatus =
+      statusFilter === "All" || order.status === statusFilter;
+
     return matchesSearch && matchesStatus;
   });
 
@@ -124,15 +141,32 @@ const Orders = () => {
     setSelectedOrder(null);
   };
 
-  const handleUpdateStatus = (orderId: string, newStatus: "pending" | "ready" | "completed" | "cancelled") => {
-    setOrders(orders.map(order => 
-      order.id === orderId ? { ...order, status: newStatus } : order
-    ));
-    
-    if (selectedOrder && selectedOrder.id === orderId) {
-      setSelectedOrder({ ...selectedOrder, status: newStatus });
+  const handleUpdateStatus = async (orderId: string, newStatus: Order["status"]) => {
+    const dbStatus = mapStatusToDbValue[newStatus];
+
+    const { error } = await supabase
+      .from("orders")
+      .update({ status: dbStatus })
+      .eq("id", orderId);
+
+    if (error) {
+      console.error("Supabase update error:", error.message);
+      toast.error("Failed to update order status");
+      return;
     }
-    
+
+    setOrders((prevOrders) =>
+      prevOrders.map((order) =>
+        order.id === orderId ? { ...order, status: newStatus } : order
+      )
+    );
+
+    if (selectedOrder && selectedOrder.id === orderId) {
+      setSelectedOrder((prevSelectedOrder) =>
+        prevSelectedOrder ? { ...prevSelectedOrder, status: newStatus } : null
+      );
+    }
+
     toast.success(`Order ${orderId} status updated to ${newStatus}`);
   };
 
@@ -151,17 +185,18 @@ const Orders = () => {
                 onChange={handleSearchChange}
               />
             </div>
-            <div className="w-full md:w-[180px]">
+            <div className="w-full md:w-[200px]">
               <Select value={statusFilter} onValueChange={setStatusFilter}>
                 <SelectTrigger>
                   <SelectValue placeholder="Filter by status" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Statuses</SelectItem>
-                  <SelectItem value="pending">Pending</SelectItem>
-                  <SelectItem value="ready">Ready for Pickup</SelectItem>
-                  <SelectItem value="completed">Completed</SelectItem>
-                  <SelectItem value="cancelled">Cancelled</SelectItem>
+                  <SelectItem value="All">All Statuses</SelectItem>
+                  {statusOptions.map((status) => (
+                    <SelectItem key={status} value={status}>
+                      {mapStatusLabel[status]}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -188,23 +223,20 @@ const Orders = () => {
                       <TableCell>{order.date}</TableCell>
                       <TableCell>${order.total.toFixed(2)}</TableCell>
                       <TableCell>
-                        <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                          order.status === "pending" 
-                            ? "bg-yellow-100 text-yellow-800" 
-                            : order.status === "ready"
-                            ? "bg-blue-100 text-blue-800"
-                            : order.status === "completed"
-                            ? "bg-green-100 text-green-800"
-                            : "bg-red-100 text-red-800"
-                        }`}>
-                          {order.status === "pending" 
-                            ? "Pending" 
-                            : order.status === "ready"
-                            ? "Ready for Pickup"
-                            : order.status === "completed"
-                            ? "Completed"
-                            : "Cancelled"
-                          }
+                        <span
+                          className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                            order.status === "Pending"
+                              ? "bg-yellow-100 text-yellow-800"
+                              : order.status === "Ready"
+                              ? "bg-blue-100 text-blue-800"
+                              : order.status === "Completed"
+                              ? "bg-green-100 text-green-800"
+                              : order.status === "Cancelled"
+                              ? "bg-red-100 text-red-800"
+                              : "bg-gray-200 text-gray-800"
+                          }`}
+                        >
+                          {mapStatusLabel[order.status]}
                         </span>
                       </TableCell>
                       <TableCell className="text-right">
@@ -241,7 +273,7 @@ const Orders = () => {
                 {selectedOrder.date} - {selectedOrder.customerName}
               </DialogDescription>
             </DialogHeader>
-            
+
             <div>
               <h3 className="font-medium mb-2">Items</h3>
               <div className="border rounded-md overflow-hidden">
@@ -260,52 +292,50 @@ const Orders = () => {
                         <TableCell>{item.name}</TableCell>
                         <TableCell className="text-right">{item.quantity}</TableCell>
                         <TableCell className="text-right">${item.price.toFixed(2)}</TableCell>
-                        <TableCell className="text-right">${(item.price * item.quantity).toFixed(2)}</TableCell>
+                        <TableCell className="text-right">
+                          ${(item.price * item.quantity).toFixed(2)}
+                        </TableCell>
                       </TableRow>
                     ))}
                     <TableRow>
-                      <TableCell colSpan={3} className="text-right font-medium">Total</TableCell>
-                      <TableCell className="text-right font-medium">${selectedOrder.total.toFixed(2)}</TableCell>
+                      <TableCell colSpan={3} className="text-right font-medium">
+                        Total
+                      </TableCell>
+                      <TableCell className="text-right font-medium">
+                        ${selectedOrder.total.toFixed(2)}
+                      </TableCell>
                     </TableRow>
                   </TableBody>
                 </Table>
               </div>
-              
+
               <div className="mt-6">
                 <h3 className="font-medium mb-2">Update Status</h3>
                 <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant={selectedOrder.status === "pending" ? "default" : "outline"}
-                    onClick={() => handleUpdateStatus(selectedOrder.id, "pending")}
-                    className="text-yellow-800"
-                  >
-                    Pending
-                  </Button>
-                  <Button
-                    variant={selectedOrder.status === "ready" ? "default" : "outline"}
-                    onClick={() => handleUpdateStatus(selectedOrder.id, "ready")}
-                    className="text-blue-800"
-                  >
-                    Ready for Pickup
-                  </Button>
-                  <Button
-                    variant={selectedOrder.status === "completed" ? "default" : "outline"}
-                    onClick={() => handleUpdateStatus(selectedOrder.id, "completed")}
-                    className="text-green-800"
-                  >
-                    Completed
-                  </Button>
-                  <Button
-                    variant={selectedOrder.status === "cancelled" ? "default" : "outline"}
-                    onClick={() => handleUpdateStatus(selectedOrder.id, "cancelled")}
-                    className="text-red-800"
-                  >
-                    Cancelled
-                  </Button>
+                  {statusOptions.map((status) => (
+                    <Button
+                      key={status}
+                      variant={selectedOrder.status === status ? "default" : "outline"}
+                      onClick={() => handleUpdateStatus(selectedOrder.id, status as Order["status"])}
+                      className={
+                        status === "Pending"
+                          ? "text-yellow-800"
+                          : status === "Ready"
+                          ? "text-blue-800"
+                          : status === "Completed"
+                          ? "text-green-800"
+                          : status === "Cancelled"
+                          ? "text-red-800"
+                          : "text-gray-800"
+                      }
+                    >
+                      {mapStatusLabel[status]}
+                    </Button>
+                  ))}
                 </div>
               </div>
             </div>
-            
+
             <DialogFooter>
               <Button onClick={handleCloseDialog}>Close</Button>
             </DialogFooter>

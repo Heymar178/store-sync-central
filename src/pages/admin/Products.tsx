@@ -1,5 +1,4 @@
-
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import DashboardLayout from "../../components/layouts/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -30,6 +29,7 @@ import {
 } from "@/components/ui/select";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { supabase } from '@/lib/supabase.ts';// Adjusted path to match project structure
 
 interface Product {
   id: string;
@@ -41,17 +41,32 @@ interface Product {
 }
 
 const Products = () => {
-  const [products, setProducts] = useState<Product[]>([
-    { id: "1", name: "Organic Banana", price: 0.99, category: "Fruits", sku: "FR001", inStock: true },
-    { id: "2", name: "Red Apple", price: 1.29, category: "Fruits", sku: "FR002", inStock: true },
-    { id: "3", name: "Broccoli", price: 2.49, category: "Vegetables", sku: "VG001", inStock: true },
-    { id: "4", name: "Whole Milk", price: 3.99, category: "Dairy", sku: "DR001", inStock: true },
-    { id: "5", name: "White Bread", price: 2.99, category: "Bakery", sku: "BK001", inStock: false },
-  ]);
-
+  const [products, setProducts] = useState<Product[]>([]);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentProduct, setCurrentProduct] = useState<Product | null>(null);
+
+  // Fetch products from Supabase
+  const fetchProducts = async () => {
+    const { data, error } = await supabase
+      .from("products")
+      .select("id, name, price, category, sku, available");
+
+    if (error) {
+      console.error("Error fetching products:", error);
+      toast.error("Failed to fetch products");
+    } else {
+      const formattedProducts = data.map((product) => ({
+        ...product,
+        inStock: product.available,
+      }));
+      setProducts(formattedProducts);
+    }
+  };
+
+  useEffect(() => {
+    fetchProducts();
+  }, []);
 
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchTerm(e.target.value);
@@ -84,30 +99,65 @@ const Products = () => {
     setCurrentProduct(null);
   };
 
-  const handleDeleteProduct = (id: string) => {
-    setProducts(products.filter(product => product.id !== id));
-    toast.success("Product deleted successfully");
+  const handleDeleteProduct = async (id: string) => {
+    const { error } = await supabase.from("products").delete().eq("id", id);
+
+    if (error) {
+      console.error("Error deleting product:", error);
+      toast.error("Failed to delete product");
+    } else {
+      setProducts(products.filter(product => product.id !== id));
+      toast.success("Product deleted successfully");
+    }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!currentProduct) return;
 
     if (currentProduct.id) {
       // Update existing product
-      setProducts(products.map(product => 
-        product.id === currentProduct.id ? currentProduct : product
-      ));
-      toast.success("Product updated successfully");
+      const { error } = await supabase
+        .from("products")
+        .update({
+          name: currentProduct.name,
+          price: currentProduct.price,
+          category: currentProduct.category,
+          sku: currentProduct.sku,
+          available: currentProduct.inStock,
+        })
+        .eq("id", currentProduct.id);
+
+      if (error) {
+        console.error("Error updating product:", error);
+        toast.error("Failed to update product");
+      } else {
+        setProducts(products.map(product => 
+          product.id === currentProduct.id ? currentProduct : product
+        ));
+        toast.success("Product updated successfully");
+      }
     } else {
       // Add new product
-      const newProduct = {
-        ...currentProduct,
-        id: Date.now().toString(),
-      };
-      setProducts([...products, newProduct]);
-      toast.success("Product added successfully");
+      const { data, error } = await supabase
+        .from("products")
+        .insert({
+          name: currentProduct.name,
+          price: currentProduct.price,
+          category: currentProduct.category,
+          sku: currentProduct.sku,
+          available: currentProduct.inStock,
+        })
+        .select();
+
+      if (error) {
+        console.error("Error adding product:", error);
+        toast.error("Failed to add product");
+      } else {
+        setProducts([...products, { ...currentProduct, id: data[0].id }]);
+        toast.success("Product added successfully");
+      }
     }
     
     handleCloseDialog();
